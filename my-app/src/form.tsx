@@ -47,7 +47,7 @@ export default function AnalyzeForm() {
 
   return (
     <div style={{ maxWidth: "500px", margin: "20px auto", padding: "20px", border: "1px solid #ccc", borderRadius: "8px" }}>
-      <h2>Is It Real?</h2>
+      <h2>oooo?</h2>
       <p>Upload content or add details to analyze.</p>
       <form onSubmit={handleSubmit(onSubmit)}>
         {/* Image Upload */}
