@@ -1,166 +1,238 @@
-import * as React from "react";
-import { useForm, Controller } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
-import { upload } from "@vercel/blob/client";
+import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-const formSchema = z
-  .object({
-    image: z.any().optional(),
-    link: z.string().optional(),
-    comments: z.string().optional(),
-  })
-  .refine(
-    (v) =>
-      v.image ||
-      (v.link && v.link.trim() !== "") ||
-      (v.comments && v.comments.trim() !== ""),
-    { message: "You must upload something or add a comment.", path: ["comments"] }
-  );
+type AnalysisResult = {
+  summary: string;
+  risk_level: "low" | "medium" | "high";
+  confidence: number;
+  red_flags: string[];
+  inconsistencies: string[];
+  next_steps: string[];
+};
 
-type FormData = z.infer<typeof formSchema>;
+export default function FormPage() {
+  const navigate = useNavigate();
 
-export default function Form() {
-  const {
-    control,
-    handleSubmit,
-    watch,
-    formState: { errors },
-  } = useForm<FormData>({
-    resolver: zodResolver(formSchema),
-    defaultValues: { image: undefined, link: "", comments: "" },
-  });
+  const [messagesText, setMessagesText] = useState("");
+  const [userContext, setUserContext] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
+  const [extraNotes, setExtraNotes] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
 
-  const values = watch();
-  const canAnalyze =
-    !!values.image || values.link?.trim() !== "" || values.comments?.trim() !== "";
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
 
-  const [loading, setLoading] = React.useState(false);
-  const [result, setResult] = React.useState<any>(null);
-  const [uploadUrl, setUploadUrl] = React.useState<string>("");
+  const canAnalyze = useMemo(() => {
+    // 최소 하나는 있어야 분석 의미가 있음
+    return (
+      messagesText.trim().length > 0 ||
+      userContext.trim().length > 0 ||
+      linkUrl.trim().length > 0 ||
+      extraNotes.trim().length > 0 ||
+      !!imageFile
+    );
+  }, [messagesText, userContext, linkUrl, extraNotes, imageFile]);
 
-  async function onSubmit(form: FormData) {
+  async function uploadImageIfNeeded(): Promise<string> {
+    if (!imageFile) return "";
+
+    const fd = new FormData();
+    fd.append("file", imageFile);
+
+    const r = await fetch("/api/upload", {
+      method: "POST",
+      body: fd,
+    });
+
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`Upload failed (${r.status}). ${t}`);
+    }
+
+    const data = await r.json();
+    const url = String(data?.url || data?.image_url || "").trim();
+    if (!url) throw new Error("Upload succeeded but no URL returned.");
+    return url;
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (loading) return; // 중복 호출 방지
+    setError("");
+
+    if (!canAnalyze) {
+      setError("Please provide at least one input (text, link, notes, or image).");
+      return;
+    }
+
     setLoading(true);
-    setResult(null);
 
     try {
-      let image_url = "";
+      const image_url = await uploadImageIfNeeded();
 
-      // 1) 이미지가 있으면 Vercel Blob 업로드
-      if (form.image instanceof File) {
-        const file = form.image as File;
-
-        const blob = await upload(file.name, file, {
-          access: "public",
-          handleUploadUrl: "/api/upload",
-        });
-
-        image_url = blob.url;
-        setUploadUrl(blob.url);
-      }
-
-      // 2) analyze로 URL만 보내기
       const payload = {
-        messages_text: "",
-        user_context: "",
-        link_url: form.link || "",
-        extra_notes: form.comments || "",
+        messages_text: messagesText,
+        user_context: userContext,
+        link_url: linkUrl,
+        extra_notes: extraNotes,
         image_url,
       };
 
-      const res = await fetch("/api/analyze", {
+      const r = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const text = await res.text();
-
-      // 3) JSON이 아니어도 에러 본문(raw) 노출
-      let parsed: any;
+      // 429 등도 여기서 잡아서 사용자에게 보여주기
+      const text = await r.text();
+      let data: any = null;
       try {
-        parsed = JSON.parse(text);
+        data = JSON.parse(text);
       } catch {
-        parsed = { error: "Non-JSON response from /api/analyze", raw: text };
+        throw new Error(`Non-JSON response from /api/analyze: ${text.slice(0, 200)}`);
       }
 
-      if (!res.ok) {
-        setResult({ status: res.status, ...parsed });
-        return;
+      if (!r.ok) {
+        const msg = String(data?.detail || data?.error || "Analysis failed");
+        throw new Error(msg);
       }
 
-      setResult(parsed);
-    } catch (e: any) {
-      setResult({ error: "Failed", detail: String(e?.message || e) });
+      const result = data as AnalysisResult;
+
+      // report 페이지로 이동하면서 결과 전달
+      navigate("/report", { state: { result } });
+    } catch (err: any) {
+      setError(String(err?.message || err));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ maxWidth: 560, margin: "20px auto", padding: 20, border: "1px solid #ccc", borderRadius: 8 }}>
-      <h2>Scam Check</h2>
-      <p>Upload a screenshot/profile photo, paste a link, or add notes.</p>
+    <div style={styles.container}>
+      <h1 style={styles.title}>Scam Risk Analyzer</h1>
 
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <div style={{ marginBottom: 12 }}>
-          <label>Upload Image</label>
-          <Controller
-            name="image"
-            control={control}
-            render={({ field }) => (
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  field.onChange(e.target.files?.[0])
-                }
-              />
-            )}
+      <form onSubmit={onSubmit} style={styles.form}>
+        <label style={styles.label}>
+          Messages Text
+          <textarea
+            value={messagesText}
+            onChange={(e) => setMessagesText(e.target.value)}
+            style={styles.textarea}
+            placeholder="Paste the conversation or message text here..."
           />
-          {uploadUrl && (
-            <div style={{ fontSize: 12, marginTop: 6 }}>
-              Uploaded:{" "}
-              <a href={uploadUrl} target="_blank" rel="noreferrer">
-                open
-              </a>
-            </div>
-          )}
-        </div>
+        </label>
 
-        <div style={{ marginBottom: 12 }}>
-          <label>Paste Link / URL</label>
-          <Controller
-            name="link"
-            control={control}
-            render={({ field }) => (
-              <input {...field} placeholder="https://example.com" style={{ width: "100%", padding: 8 }} />
-            )}
+        <label style={styles.label}>
+          User Context
+          <textarea
+            value={userContext}
+            onChange={(e) => setUserContext(e.target.value)}
+            style={styles.textarea}
+            placeholder="Any background about the situation..."
           />
-        </div>
+        </label>
 
-        <div style={{ marginBottom: 12 }}>
-          <label>Comments</label>
-          <Controller
-            name="comments"
-            control={control}
-            render={({ field }) => (
-              <textarea {...field} rows={4} placeholder="Extra details..." style={{ width: "100%", padding: 8 }} />
-            )}
+        <label style={styles.label}>
+          Link URL
+          <input
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            style={styles.input}
+            placeholder="https://..."
           />
-          {errors.comments && <p style={{ color: "red" }}>{errors.comments.message}</p>}
-        </div>
+        </label>
 
-        <button type="submit" disabled={!canAnalyze || loading} style={{ padding: "10px 18px" }}>
+        <label style={styles.label}>
+          Extra Notes
+          <textarea
+            value={extraNotes}
+            onChange={(e) => setExtraNotes(e.target.value)}
+            style={styles.textarea}
+            placeholder="Anything else you want the analyzer to consider..."
+          />
+        </label>
+
+        <label style={styles.label}>
+          Optional Image
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+            style={styles.input}
+          />
+        </label>
+
+        {error ? <div style={styles.error}>{error}</div> : null}
+
+        <button
+          type="submit"
+          disabled={!canAnalyze || loading}
+          style={{
+            ...styles.button,
+            opacity: !canAnalyze || loading ? 0.6 : 1,
+            cursor: !canAnalyze || loading ? "not-allowed" : "pointer",
+          }}
+        >
           {loading ? "Analyzing..." : "Analyze"}
         </button>
       </form>
-
-      {result && (
-        <pre style={{ marginTop: 16, background: "#f7f7f7", padding: 12, overflowX: "auto" }}>
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      )}
     </div>
   );
 }
+
+const styles: { [k: string]: React.CSSProperties } = {
+  container: {
+    maxWidth: 780,
+    margin: "40px auto",
+    padding: 24,
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+  },
+  title: { marginBottom: 16 },
+  form: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: 20,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.06)",
+  },
+  label: { display: "block", marginBottom: 14, fontWeight: 600 },
+  textarea: {
+    width: "100%",
+    minHeight: 90,
+    marginTop: 6,
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    fontWeight: 400,
+    resize: "vertical",
+  },
+  input: {
+    width: "100%",
+    marginTop: 6,
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    fontWeight: 400,
+  },
+  button: {
+    width: "100%",
+    marginTop: 10,
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: "none",
+    fontWeight: 700,
+    background: "#111827",
+    color: "#fff",
+  },
+  error: {
+    marginTop: 8,
+    marginBottom: 6,
+    color: "#b91c1c",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 10,
+    padding: 10,
+    fontSize: 14,
+  },
+};

@@ -1,9 +1,10 @@
 import React from "react";
+import { Link, useLocation } from "react-router-dom";
 
 type AnalysisResult = {
   summary: string;
   risk_level: "low" | "medium" | "high";
-  confidence: number; // 0 ~ 1
+  confidence: number; // 0..1
   red_flags: string[];
   inconsistencies: string[];
   next_steps: string[];
@@ -17,123 +18,140 @@ function confidenceLabel(c: number) {
 }
 
 function riskColor(level: AnalysisResult["risk_level"]) {
-  if (level === "high") return "#dc2626";   // red
-  if (level === "medium") return "#f59e0b"; // orange
-  return "#16a34a";                         // green
+  if (level === "high") return "#dc2626";
+  if (level === "medium") return "#f59e0b";
+  return "#16a34a";
 }
 
-export default function ReportPage({ result }: { result: AnalysisResult }) {
+export default function ReportPage() {
+  const location = useLocation();
+  const result = (location.state as any)?.result as AnalysisResult | undefined;
+
+  if (!result) {
+    return (
+      <div style={styles.container}>
+        <h1 style={styles.title}>Safety Analysis Report</h1>
+        <p style={styles.muted}>
+          No report data found. Please run an analysis first.
+        </p>
+        <Link to="/" style={styles.link}>
+          Go back to analyzer
+        </Link>
+      </div>
+    );
+  }
+
   const confidencePercent = Math.round(result.confidence * 100);
 
   return (
     <div style={styles.container}>
       <h1 style={styles.title}>Safety Analysis Report</h1>
 
-      {/* Risk Level */}
-      <section style={styles.section}>
-        <h2>Risk Level</h2>
-        <span
-          style={{
-            ...styles.badge,
-            backgroundColor: riskColor(result.risk_level),
-          }}
-        >
-          {result.risk_level.toUpperCase()}
-        </span>
-      </section>
-
-      {/* Confidence */}
-      <section style={styles.section}>
-        <h2>Confidence Level</h2>
-
-        <strong>{confidencePercent}%</strong>
-
-        <div style={styles.confidenceBar}>
-          <div
+      <div style={styles.topRow}>
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Risk Level</div>
+          <span
             style={{
-              ...styles.confidenceFill,
-              width: `${confidencePercent}%`,
+              ...styles.badge,
+              backgroundColor: riskColor(result.risk_level),
             }}
-          />
+          >
+            {result.risk_level.toUpperCase()}
+          </span>
         </div>
 
-        <p style={styles.muted}>
-          {confidenceLabel(result.confidence)}
-        </p>
-      </section>
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Confidence</div>
+          <div style={{ fontWeight: 800, fontSize: 18 }}>{confidencePercent}%</div>
+          <div style={styles.confidenceBar}>
+            <div
+              style={{
+                ...styles.confidenceFill,
+                width: `${confidencePercent}%`,
+              }}
+            />
+          </div>
+          <div style={styles.muted}>{confidenceLabel(result.confidence)}</div>
+        </div>
+      </div>
 
-      {/* Summary */}
       <section style={styles.section}>
         <h2>Summary</h2>
         <p>{result.summary}</p>
       </section>
 
-      {/* Red Flags */}
       <section style={styles.section}>
         <h2>Red Flags</h2>
         {result.red_flags.length === 0 ? (
           <p style={styles.muted}>No red flags detected.</p>
         ) : (
           <ul>
-            {result.red_flags.map((flag, i) => (
-              <li key={i}>{flag}</li>
+            {result.red_flags.map((x, i) => (
+              <li key={i}>{x}</li>
             ))}
           </ul>
         )}
       </section>
 
-      {/* Inconsistencies */}
       <section style={styles.section}>
         <h2>Inconsistencies</h2>
         {result.inconsistencies.length === 0 ? (
           <p style={styles.muted}>No inconsistencies found.</p>
         ) : (
           <ul>
-            {result.inconsistencies.map((item, i) => (
-              <li key={i}>{item}</li>
+            {result.inconsistencies.map((x, i) => (
+              <li key={i}>{x}</li>
             ))}
           </ul>
         )}
       </section>
 
-      {/* Next Steps */}
       <section style={styles.section}>
         <h2>Recommended Next Steps</h2>
         <ol>
-          {result.next_steps.map((step, i) => (
-            <li key={i}>{step}</li>
+          {result.next_steps.map((x, i) => (
+            <li key={i}>{x}</li>
           ))}
         </ol>
       </section>
+
+      <div style={{ marginTop: 18 }}>
+        <Link to="/" style={styles.link}>
+          Run another analysis
+        </Link>
+      </div>
     </div>
   );
 }
 
-/* ---------- styles ---------- */
-
-const styles: { [key: string]: React.CSSProperties } = {
+const styles: { [k: string]: React.CSSProperties } = {
   container: {
-    maxWidth: 720,
+    maxWidth: 820,
     margin: "40px auto",
     padding: 24,
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
     lineHeight: 1.6,
-    background: "#ffffff",
+  },
+  title: { marginBottom: 18 },
+  topRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 14,
+    marginBottom: 18,
+  },
+  card: {
+    background: "#fff",
     borderRadius: 12,
+    padding: 16,
     boxShadow: "0 10px 25px rgba(0,0,0,0.06)",
   },
-  title: {
-    marginBottom: 24,
-  },
-  section: {
-    marginBottom: 28,
-  },
+  cardTitle: { fontWeight: 700, marginBottom: 8 },
   badge: {
     display: "inline-block",
     padding: "6px 12px",
     borderRadius: 999,
     color: "#fff",
-    fontWeight: 600,
+    fontWeight: 700,
     fontSize: 14,
   },
   confidenceBar: {
@@ -142,16 +160,25 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: "#e5e7eb",
     borderRadius: 6,
     overflow: "hidden",
-    marginTop: 6,
-    marginBottom: 6,
+    marginTop: 8,
+    marginBottom: 8,
   },
   confidenceFill: {
     height: "100%",
     background: "linear-gradient(90deg, #22c55e, #16a34a)",
-    transition: "width 0.4s ease",
+    transition: "width 0.35s ease",
   },
-  muted: {
-    color: "#6b7280",
-    fontSize: 14,
+  section: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: 18,
+    marginTop: 14,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.06)",
+  },
+  muted: { color: "#6b7280", fontSize: 14 },
+  link: {
+    color: "#111827",
+    fontWeight: 700,
+    textDecoration: "underline",
   },
 };
